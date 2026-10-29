@@ -1,0 +1,19 @@
+name = "duorestockbot"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# One-minute Cron Trigger (the only trigger; managed exclusively via this file).
+# NOTE: not deployed yet — see migration plan Stage 5.
+[triggers]
+crons = ["* * * * *"]
+
+# D1 database binding (created 2026-10-29, region ENAM).
+[[d1_databases]]
+binding = "DB"
+database_name = "duorestockbot"
+database_id = "380b3139-3bec-4ed2-b487-3c7be4c2334c"
+
+# Secrets (never in this file):
+#   TELEGRAM_BOT_TOKEN  -> `npx wrangler secret put TELEGRAM_BOT_TOKEN`
+#   TELEGRAM_CHAT_ID    -> `npx wrangler secret put TELEGRAM_CHAT_ID`
+# For local development, put them in worker/.dev.vars (gitignored).

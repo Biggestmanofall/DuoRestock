@@ -1,0 +1,35 @@
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local data
+*.sqlite
+*.sqlite3
+*.db
+data/
+
+# Testing / tooling
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Cloudflare Worker (worker/)
+worker/.dev.vars
+worker/.wrangler/
+worker/node_modules/
+worker/dist/
+node_modules/
+

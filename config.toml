@@ -1,0 +1,88 @@
+# DuoRestockBot configuration (no secrets here — those live in .env, which is gitignored).
+
+[monitor]
+# How often to poll Apple's pickup availability endpoint (one request covers all
+# monitored stores and all monitored part numbers).
+poll_interval_seconds = 60
+# On a hit, wait this long and re-check with a fresh request before alerting.
+recheck_delay_seconds = 5
+# After alerting about a store+configuration, suppress repeat alerts for this long.
+cooldown_minutes = 5
+# Backoff for persistently failing Apple requests: starts here and doubles,
+# capped at backoff_max_seconds. Reset after any successful request.
+backoff_initial_seconds = 60
+backoff_max_seconds = 900
+
+[apple]
+# Public endpoint used by Apple's own "Check availability" pickup UI.
+pickup_endpoint = "https://www.apple.com/shop/retail/pickup-message"
+# One request returns the ~12 nearest stores; this location covers all three
+# monitored stores (verified 2026-10-29).
+location = "Nashville, TN"
+# Browser-like User-Agent; Apple's storefront works fine with this.
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
+# Official Apple product page, included in alert messages.
+buy_url = "https://www.apple.com/shop/buy-iphone/iphone-duo"
+
+# Monitored Apple Stores (store numbers verified against Apple's pickup API on 2026-10-29).
+[[stores]]
+number = "R513"
+name = "Apple CoolSprings Galleria"
+
+[[stores]]
+number = "R123"
+name = "Apple Green Hills"
+
+[[stores]]
+number = "R133"
+name = "Apple Downtown Nashville"
+
+# All 8 iPhone Duo configurations — every color and every capacity is monitored.
+# Part numbers verified against the pickup API's own product titles on 2026-10-29.
+[[parts]]
+number = "MK1E4LL/A"
+description = "iPhone Duo 256GB Star White"
+color = "Star White"
+storage = "256GB"
+
+[[parts]]
+number = "MK1F4LL/A"
+description = "iPhone Duo 256GB Night Sky"
+color = "Night Sky"
+storage = "256GB"
+
+[[parts]]
+number = "MK1G4LL/A"
+description = "iPhone Duo 512GB Star White"
+color = "Star White"
+storage = "512GB"
+
+[[parts]]
+number = "MK1H4LL/A"
+description = "iPhone Duo 512GB Night Sky"
+color = "Night Sky"
+storage = "512GB"
+
+[[parts]]
+number = "MK1J4LL/A"
+description = "iPhone Duo 1TB Star White"
+color = "Star White"
+storage = "1TB"
+
+[[parts]]
+number = "MK1L4LL/A"
+description = "iPhone Duo 1TB Night Sky"
+color = "Night Sky"
+storage = "1TB"
+
+[[parts]]
+number = "MK1Q4LL/A"
+description = "iPhone Duo 2TB Star White"
+color = "Star White"
+storage = "2TB"
+
+[[parts]]
+number = "MK1R4LL/A"
+description = "iPhone Duo 2TB Night Sky"
+color = "Night Sky"
+storage = "2TB"

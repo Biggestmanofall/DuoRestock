@@ -1,0 +1,11 @@
+# Copy to worker/.dev.vars for LOCAL development only (gitignored, never committed).
+# This file is the wrangler-dev equivalent of the Python bot's .env.
+# In production these are Cloudflare secrets set via `npx wrangler secret put ...`.
+
+TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
+TELEGRAM_CHAT_ID=your-chat-id
+
+# Development-only switch that enables the /test-telegram route in `wrangler dev`.
+# NEVER set this as a production secret or var: with it unset, the production
+# Worker's fetch handler always returns 404 and cannot send any message.
+DEV_TEST_ROUTE=enabled
