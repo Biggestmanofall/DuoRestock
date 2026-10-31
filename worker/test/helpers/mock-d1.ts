@@ -3,7 +3,7 @@
  *
  * It recognizes exactly the SQL statements state.ts issues (fails loudly on
  * anything else), so the unit tests exercise state.ts's behavior end-to-end
- * without a database. Real D1 semantics are verified later via `wrangler dev`
+ * without a database. Real D1 semantics are verified later via wrangler dev
  * (miniflare) and after deployment.
  */
 
@@ -21,6 +21,17 @@ interface MockFailureRow {
   nextAttemptAt: number;
 }
 
+export interface MockMetaRow {
+  lastAttemptAt: number | null;
+  lastSuccessAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+
+function emptyMeta(): MockMetaRow {
+  return { lastAttemptAt: null, lastSuccessAt: null, lastError: null, lastErrorAt: null };
+}
+
 function normalize(sql: string): string {
   return sql.replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -29,6 +40,9 @@ export class MockD1 {
   readonly states = new Map<string, MockStateRow>();
   readonly alerts = new Map<string, number>();
   failure: MockFailureRow | null = null;
+  meta: MockMetaRow | null = null;
+  /** monitor_lease: held_until epoch ms (0 = free), null = never used. */
+  lease: number | null = null;
   readonly executedSql: string[] = [];
 
   prepare(sql: string): D1PreparedStatement {
@@ -49,8 +63,8 @@ export class MockD1 {
       },
       async run<T = unknown>(): Promise<D1Result<T>> {
         self.executedSql.push(normalize(sql));
-        self.#executeRun(normalize(sql), params);
-        return { results: [], success: true, meta: {} } as unknown as D1Result<T>;
+        const changes = self.#executeRun(normalize(sql), params);
+        return { results: [], success: true, meta: { changes } } as unknown as D1Result<T>;
       },
     };
     return statement as unknown as D1PreparedStatement;
@@ -85,6 +99,19 @@ export class MockD1 {
         ? { consecutive_failures: this.failure.consecutive, next_attempt_at: this.failure.nextAttemptAt }
         : null;
     }
+    if (
+      sql ===
+      "select last_attempt_at, last_success_at, last_error, last_error_at from meta where id = 1"
+    ) {
+      return this.meta
+        ? {
+            last_attempt_at: this.meta.lastAttemptAt,
+            last_success_at: this.meta.lastSuccessAt,
+            last_error: this.meta.lastError,
+            last_error_at: this.meta.lastErrorAt,
+          }
+        : null;
+    }
     throw new Error(`MockD1: unhandled SQL for first(): ${sql}`);
   }
 
@@ -96,6 +123,17 @@ export class MockD1 {
           store_number: row.storeNumber,
           part_number: row.partNumber,
           available: row.available,
+        })),
+      };
+    }
+    if (sql === "select store_number, part_number, available, updated_at from inventory_state") {
+      return {
+        success: true,
+        results: [...this.states.values()].map((row) => ({
+          store_number: row.storeNumber,
+          part_number: row.partNumber,
+          available: row.available,
+          updated_at: row.updatedAt,
         })),
       };
     }
@@ -111,26 +149,54 @@ export class MockD1 {
     throw new Error(`MockD1: unhandled SQL for all(): ${sql}`);
   }
 
-  #executeRun(sql: string, params: unknown[]): void {
+  #executeRun(sql: string, params: unknown[]): number {
+    if (sql.startsWith("insert into monitor_lease")) {
+      // Atomic conditional upsert: acquires only when free or expired.
+      const [heldUntil, now] = params as [number, number];
+      if (this.lease === null || this.lease <= now) {
+        this.lease = heldUntil;
+        return 1; // acquired
+      }
+      return 0; // held by someone else
+    }
+    if (sql === "update monitor_lease set held_until = 0 where id = 1") {
+      this.lease = 0;
+      return 1;
+    }
     if (sql.startsWith("insert into inventory_state")) {
       const [storeNumber, partNumber, available, updatedAt] = params as [string, string, 0 | 1 | 2, number];
       this.states.set(`${storeNumber}:${partNumber}`, { storeNumber, partNumber, available, updatedAt });
-      return;
+      return 1;
     }
     if (sql.startsWith("insert into alerts")) {
       const [storeNumber, partNumber, alertedAt] = params as [string, string, number];
       this.alerts.set(`${storeNumber}:${partNumber}`, alertedAt);
-      return;
+      return 1;
     }
     if (sql.startsWith("insert into failures")) {
       const [consecutive, nextAttemptAt] = params as [number, number];
       this.failure = { consecutive, nextAttemptAt };
-      return;
+      return 1;
+    }
+    if (sql.startsWith("insert into meta")) {
+      const next = { ...(this.meta ?? emptyMeta()) };
+      if (sql.includes("do update set last_attempt_at = excluded.last_attempt_at")) {
+        next.lastAttemptAt = params[0] as number;
+      } else if (sql.includes("do update set last_success_at = excluded.last_success_at")) {
+        next.lastSuccessAt = params[0] as number;
+      } else if (sql.includes("last_error = excluded.last_error")) {
+        next.lastError = params[0] as string;
+        next.lastErrorAt = params[1] as number;
+      } else {
+        throw new Error(`MockD1: unhandled meta upsert: ${sql}`);
+      }
+      this.meta = next;
+      return 1;
     }
     if (sql === "delete from failures where id = 1") {
       this.failure = null;
-      return;
+      return 1;
     }
-    throw new Error(`MockD1: unhandled SQL for run(): ${sql}`);
+    throw new Error("MockD1: unhandled SQL for run(): " + sql);
   }
 }

@@ -11,14 +11,23 @@
  */
 
 import type { D1Database } from "@cloudflare/workers-types";
-import { APPLE, buildPickupUrl } from "./config";
+import { APPLE, SCHEDULE, buildPickupUrl } from "./config";
+import { runMonitoringInvocation } from "./monitor-loop";
 import { runCheck } from "./run";
+import { buildStatus, isAuthorized } from "./status";
+import { acquireMonitorLease, releaseMonitorLease } from "./state";
 import { sendTelegramMessage } from "./telegram";
 
 export interface Env {
   DB: D1Database;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
+  /**
+   * Bearer token required by GET /status (read-only dashboard data).
+   * When unset, /status always returns 404 — the endpoint is disabled.
+   * Set via `npx wrangler secret put DASHBOARD_STATUS_TOKEN`.
+   */
+  DASHBOARD_STATUS_TOKEN?: string;
   /** Local-development-only flag; must never be set in production. */
   DEV_TEST_ROUTE?: string;
 }
@@ -29,25 +38,50 @@ export default {
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
+    // 20-second monitoring loop (Option A): the * * * * * cron fires each
+    // minute; this invocation performs checks at slots 0/20/40s, only within
+    // the 7:00–18:00 America/Chicago window, strictly sequentially.
     ctx.waitUntil(
-      runCheck({
-        db: env.DB,
-        telegram: { token: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID },
-        nowMs: () => Date.now(),
-        fetchImpl: fetch,
+      runMonitoringInvocation({
+        runCheckFn: () =>
+          runCheck({
+            db: env.DB,
+            telegram: { token: env.TELEGRAM_BOT_TOKEN, chatId: env.TELEGRAM_CHAT_ID },
+            nowMs: () => Date.now(),
+            fetchImpl: fetch,
+          }),
+        wait: (ms: number) => scheduler.wait(ms),
+        now: () => Date.now(),
+        acquireLease: () => acquireMonitorLease(env.DB, Date.now(), SCHEDULE.leaseHoldMs),
+        releaseLease: () => releaseMonitorLease(env.DB),
       })
         .then((outcome) => {
           // Structured outcome log for observability (Workers Logs / wrangler tail).
-          console.log(`runCheck outcome: ${JSON.stringify(outcome)}`);
+          console.log(`monitor invocation: ${JSON.stringify(outcome)}`);
         })
         .catch((error: unknown) => {
-          console.error(`runCheck crashed: ${error instanceof Error ? error.message : String(error)}`);
+          console.error(
+            `monitor invocation crashed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }),
     );
   },
 
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/status") {
+      // Read-only dashboard data. GET only, bearer-token gated; anything
+      // wrong (wrong method, missing/malformed/wrong token, or the secret
+      // not being configured at all) returns an indistinguishable 404 so
+      // the endpoint is not advertised. Never executes request-driven SQL,
+      // never exposes secrets, never triggers an Apple request.
+      if (request.method !== "GET" || !isAuthorized(request, env.DASHBOARD_STATUS_TOKEN)) {
+        return new Response("Not Found", { status: 404 });
+      }
+      const payload = await buildStatus(env.DB, Date.now());
+      return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
+    }
 
     if (url.pathname === "/test-telegram" && request.method === "GET") {
       if (env.DEV_TEST_ROUTE !== "enabled") {

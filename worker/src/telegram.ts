@@ -38,6 +38,9 @@ export async function sendTelegramMessage(
         text,
         disable_web_page_preview: true,
       }),
+      // Defensive timeout so a hung Telegram call can never stall the
+      // 20-second monitoring loop (alert sends are retried on the next check).
+      signal: AbortSignal.timeout(10_000),
     });
   } catch (error) {
     // Never include the caught message: it can contain the URL (and the token).

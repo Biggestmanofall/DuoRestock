@@ -91,6 +91,13 @@ describe("runCheck (end-to-end orchestration with fakes)", () => {
     expect(outcome).toEqual({ status: "ok", checked: 1, availableNow: 0, alertsSent: 0, suppressed: 0 });
     expect(h.mock.stateValue("R513", "MK1H4LL/A")).toBe(0);
     expect(h.telegram.messages).toEqual([]);
+    // Metadata: attempt and success recorded at the same instant.
+    expect(h.mock.meta).toEqual({
+      lastAttemptAt: 1_000_000_000_000,
+      lastSuccessAt: 1_000_000_000_000,
+      lastError: null,
+      lastErrorAt: null,
+    });
   });
 
   it("full transition flow: pending -> confirmation -> one alert -> quiet", async () => {
@@ -146,6 +153,17 @@ describe("runCheck (end-to-end orchestration with fakes)", () => {
     expect(retry.status).toBe("ok");
     expect(h.mock.failure).toBeNull();
     expect(h.mock.stateValue("R513", "MK1H4LL/A")).toBe(2);
+
+    // Metadata across the whole failure sequence:
+    // - failed attempt recorded (attempt + error, never a fake "success")
+    // - gated run did NOT count as an attempt (lastAttemptAt unchanged)
+    // - successful retry recorded attempt + success; error history retained
+    expect(h.mock.meta).toEqual({
+      lastAttemptAt: 1_000_000_061_000,
+      lastSuccessAt: 1_000_000_061_000,
+      lastError: "HTTP 503",
+      lastErrorAt: 1_000_000_000_000,
+    });
   });
 
   it("response without monitored stores is ambiguous: error + backoff, never 'all unavailable'", async () => {

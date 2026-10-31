@@ -5,6 +5,10 @@
 TELEGRAM_BOT_TOKEN=your-bot-token-from-botfather
 TELEGRAM_CHAT_ID=your-chat-id
 
+# Bearer token for the read-only /status endpoint (generate a long random string).
+# Without it /status returns 404 locally too.
+DASHBOARD_STATUS_TOKEN=your-long-random-status-token
+
 # Development-only switch that enables the /test-telegram route in `wrangler dev`.
 # NEVER set this as a production secret or var: with it unset, the production
 # Worker's fetch handler always returns 404 and cannot send any message.

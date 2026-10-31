@@ -14,6 +14,9 @@ database_name = "duorestockbot"
 database_id = "380b3139-3bec-4ed2-b487-3c7be4c2334c"
 
 # Secrets (never in this file):
-#   TELEGRAM_BOT_TOKEN  -> `npx wrangler secret put TELEGRAM_BOT_TOKEN`
-#   TELEGRAM_CHAT_ID    -> `npx wrangler secret put TELEGRAM_CHAT_ID`
+#   TELEGRAM_BOT_TOKEN       -> `npx wrangler secret put TELEGRAM_BOT_TOKEN`
+#   TELEGRAM_CHAT_ID         -> `npx wrangler secret put TELEGRAM_CHAT_ID`
+#   DASHBOARD_STATUS_TOKEN   -> `npx wrangler secret put DASHBOARD_STATUS_TOKEN`
+#                                (bearer token for the read-only /status endpoint;
+#                                /status returns 404 while it is unset)
 # For local development, put them in worker/.dev.vars (gitignored).

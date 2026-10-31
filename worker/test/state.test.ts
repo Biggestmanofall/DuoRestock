@@ -2,12 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { D1Database } from "@cloudflare/workers-types";
 import { MockD1 } from "./helpers/mock-d1";
 import {
+  acquireMonitorLease,
   clearFailure,
   getFailureState,
   getLastAlertTimes,
+  getMeta,
+  getStateRows,
   getStates,
+  markAttempt,
+  markError,
+  markSuccess,
   recordAlerts,
   recordFailure,
+  releaseMonitorLease,
   upsertStates,
 } from "../src/state";
 
@@ -76,5 +83,77 @@ describe("failure backoff ledger", () => {
 
     await clearFailure(d1);
     expect(await getFailureState(d1)).toBeNull();
+  });
+});
+
+describe("freshness metadata (dashboard support)", () => {
+  it("starts null and accumulates marks incrementally without clobbering", async () => {
+    const { mock, d1 } = db();
+    expect(await getMeta(d1)).toBeNull();
+
+    await markAttempt(d1, 1000);
+    expect(mock.meta).toEqual({ lastAttemptAt: 1000, lastSuccessAt: null, lastError: null, lastErrorAt: null });
+
+    await markSuccess(d1, 2000); // does not clobber lastAttemptAt
+    expect(mock.meta).toEqual({ lastAttemptAt: 1000, lastSuccessAt: 2000, lastError: null, lastErrorAt: null });
+
+    await markError(d1, "HTTP 541", 3000); // does not clobber success
+    expect(mock.meta).toEqual({ lastAttemptAt: 1000, lastSuccessAt: 2000, lastError: "HTTP 541", lastErrorAt: 3000 });
+
+    const meta = await getMeta(d1);
+    expect(meta).toEqual({
+      lastAttemptAt: 1000,
+      lastSuccessAt: 2000,
+      lastError: "HTTP 541",
+      lastErrorAt: 3000,
+    });
+  });
+
+  it("getStateRows returns availability with last-change timestamps", async () => {
+    const { d1 } = db();
+    await upsertStates(
+      d1,
+      [
+        { storeNumber: "R513", partNumber: "MK1H4LL/A", available: 0 },
+        { storeNumber: "R123", partNumber: "MK1G4LL/A", available: 1 },
+      ],
+      777,
+    );
+    const rows = await getStateRows(d1);
+    expect(rows.get("R513:MK1H4LL/A")).toEqual({ available: 0, updatedAt: 777 });
+    expect(rows.get("R123:MK1G4LL/A")).toEqual({ available: 1, updatedAt: 777 });
+    expect(rows.has("R133:MK1E4LL/A")).toBe(false); // never observed -> absent
+  });
+});
+
+describe("monitor lease (mutual exclusion across invocations)", () => {
+  it("acquires when free, denies while held, and re-acquires after release", async () => {
+    const { mock, d1 } = db();
+    // Free (never used): acquires.
+    expect(await acquireMonitorLease(d1, 1_000, 30_000)).toBe(true);
+    expect(mock.lease).toBe(31_000);
+    // Another invocation at t=1,500 while held until 31,000: denied.
+    expect(await acquireMonitorLease(d1, 1_500, 30_000)).toBe(false);
+    expect(mock.lease).toBe(31_000); // unchanged
+    // Release (the original invocation finished its check).
+    await releaseMonitorLease(d1);
+    expect(mock.lease).toBe(0);
+    // Now acquirable again.
+    expect(await acquireMonitorLease(d1, 2_000, 30_000)).toBe(true);
+    expect(mock.lease).toBe(32_000);
+  });
+
+  it("an expired lease is acquirable (crash recovery without manual release)", async () => {
+    const { mock, d1 } = db();
+    expect(await acquireMonitorLease(d1, 1_000, 30_000)).toBe(true); // held until 31,000
+    // A crashed invocation never released; time has moved past the expiry.
+    expect(await acquireMonitorLease(d1, 31_500, 30_000)).toBe(true);
+    expect(mock.lease).toBe(61_500);
+  });
+
+  it("the boundary is inclusive: acquisition at exactly held_until succeeds", async () => {
+    const { d1 } = db();
+    expect(await acquireMonitorLease(d1, 1_000, 30_000)).toBe(true); // until 31,000
+    expect(await acquireMonitorLease(d1, 31_000, 5_000)).toBe(true); // held_until <= now
   });
 });

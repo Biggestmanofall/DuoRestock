@@ -131,3 +131,141 @@ export async function recordFailure(
 export async function clearFailure(db: D1Database): Promise<void> {
   await db.prepare("DELETE FROM failures WHERE id = 1").run();
 }
+
+// --------------------------------------------------------------- monitor lease
+
+/**
+ * Atomic lease acquisition: returns true if this invocation now EXCLUSIVELY
+ * holds the monitor lease until nowMs + holdForMs.
+ *
+ * Implemented as a single conditional upsert — D1 serializes writes, so when
+ * two overlapping invocations race, exactly one gets changes > 0. A lease
+ * that has expired (held_until <= nowMs) is always acquirable, which is also
+ * the crash-recovery path: a dead invocation's lease self-expires.
+ */
+export async function acquireMonitorLease(
+  db: D1Database,
+  nowMs: number,
+  holdForMs: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO monitor_lease (id, held_until)
+       VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET held_until = excluded.held_until
+       WHERE monitor_lease.held_until <= ?`,
+    )
+    .bind(nowMs + holdForMs, nowMs)
+    .run();
+  // meta.changes is verified present against the real D1 binding (workerd);
+  // rows_written is a defensive fallback with identical semantics here (a
+  // denied upsert writes nothing, an acquired one writes exactly one row).
+  const meta = (result.meta ?? {}) as { changes?: number; rows_written?: number };
+  const changes = meta.changes ?? meta.rows_written ?? 0;
+  return changes > 0;
+}
+
+/** Release the lease immediately after a check completes (expiry is the backstop). */
+export async function releaseMonitorLease(db: D1Database): Promise<void> {
+  await db
+    .prepare("UPDATE monitor_lease SET held_until = 0 WHERE id = 1")
+    .run();
+}
+
+// ------------------------------------------------------------------- metadata
+
+/** Freshness metadata persisted by runCheck; read by the /status endpoint. */
+export interface MetaRow {
+  readonly lastAttemptAt: number | null;
+  readonly lastSuccessAt: number | null;
+  readonly lastError: string | null;
+  readonly lastErrorAt: number | null;
+}
+
+interface MetaDbRow {
+  last_attempt_at: number | null;
+  last_success_at: number | null;
+  last_error: string | null;
+  last_error_at: number | null;
+}
+
+export async function getMeta(db: D1Database): Promise<MetaRow | null> {
+  const row = await db
+    .prepare(
+      "SELECT last_attempt_at, last_success_at, last_error, last_error_at FROM meta WHERE id = 1",
+    )
+    .first<MetaDbRow>();
+  if (!row) return null;
+  return {
+    lastAttemptAt: row.last_attempt_at,
+    lastSuccessAt: row.last_success_at,
+    lastError: row.last_error,
+    lastErrorAt: row.last_error_at,
+  };
+}
+
+/** Record that a check is actually being attempted (not a gated/backing-off run). */
+export async function markAttempt(db: D1Database, atMs: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO meta (id, last_attempt_at)
+       VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET last_attempt_at = excluded.last_attempt_at`,
+    )
+    .bind(atMs)
+    .run();
+}
+
+/** Record a successful (parsed and validated) check. */
+export async function markSuccess(db: D1Database, atMs: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO meta (id, last_success_at)
+       VALUES (1, ?)
+       ON CONFLICT(id) DO UPDATE SET last_success_at = excluded.last_success_at`,
+    )
+    .bind(atMs)
+    .run();
+}
+
+/** Record a failed check with its error message (never "unavailable"). */
+export async function markError(db: D1Database, message: string, atMs: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO meta (id, last_error, last_error_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         last_error = excluded.last_error,
+         last_error_at = excluded.last_error_at`,
+    )
+    .bind(message, atMs)
+    .run();
+}
+
+// ------------------------------------------------------------ full state rows
+
+export interface StateRowWithTimestamp {
+  readonly available: AvailabilityState;
+  readonly updatedAt: number;
+}
+
+/**
+ * Full inventory rows including updated_at (last time THAT pair's state
+ * changed), used by the /status endpoint. NOTE: updated_at is the last
+ * CHANGE, not the last check — global freshness comes from getMeta().
+ */
+export async function getStateRows(
+  db: D1Database,
+): Promise<Map<string, StateRowWithTimestamp>> {
+  const result = await db
+    .prepare("SELECT store_number, part_number, available, updated_at FROM inventory_state")
+    .all<StateRow & { updated_at: number }>();
+  const rows = new Map<string, StateRowWithTimestamp>();
+  for (const row of result.results ?? []) {
+    rows.set(`${row.store_number}:${row.part_number}`, {
+      available: rowToAvailabilityState(row.available),
+      updatedAt: row.updated_at,
+    });
+  }
+  return rows;
+}

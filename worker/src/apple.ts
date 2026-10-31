@@ -23,7 +23,11 @@ export async function fetchPickupBody(
   fetchImpl: FetchLike,
   options: FetchPickupOptions = {},
 ): Promise<unknown> {
-  const timeoutMs = options.timeoutMs ?? 20_000;
+  // 10-second timeout (approved): the 20-second check cadence cannot afford a
+  // 20-second hung request. A timeout is ALWAYS an error (TimeoutError) —
+  // never confirmed unavailability. If legitimate Apple responses ever need
+  // longer than 10s, that gets reported and re-approved, not silently raised.
+  const timeoutMs = options.timeoutMs ?? 10_000;
   let response: Response;
   try {
     response = await fetchImpl(url, {

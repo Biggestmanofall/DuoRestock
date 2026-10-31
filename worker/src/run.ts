@@ -24,6 +24,9 @@ import {
   getFailureState,
   getLastAlertTimes,
   getStates,
+  markAttempt,
+  markError,
+  markSuccess,
   recordAlerts,
   recordFailure,
   upsertStates,
@@ -59,6 +62,10 @@ export async function runCheck(deps: RunDeps): Promise<RunOutcome> {
     return { status: "backing-off", nextAttemptAt: failure.nextAttemptAt };
   }
 
+  // 1.5 This invocation will actually hit Apple (not gated): record the attempt
+  //     timestamp for the dashboard's freshness display.
+  await markAttempt(deps.db, now);
+
   // 2. Fetch + parse. ANY failure here counts as a failed check (never "unavailable").
   let records: PickupRecord[];
   try {
@@ -70,13 +77,15 @@ export async function runCheck(deps: RunDeps): Promise<RunOutcome> {
   } catch (error) {
     const consecutive = (failure?.consecutiveFailures ?? 0) + 1;
     const backoff = backoffSecondsFor(consecutive);
-    await recordFailure(deps.db, consecutive, now + backoff * 1000);
     const message = error instanceof Error ? error.message : "unknown error";
+    await recordFailure(deps.db, consecutive, now + backoff * 1000);
+    await markError(deps.db, message, now);
     return { status: "error", message, backoffSeconds: backoff };
   }
 
-  // 3. Successful check: reset the backoff gate.
+  // 3. Successful check: reset the backoff gate and record freshness.
   await clearFailure(deps.db);
+  await markSuccess(deps.db, now);
 
   // 4. Diff against persisted state and decide alerts.
   const states = await getStates(deps.db);
